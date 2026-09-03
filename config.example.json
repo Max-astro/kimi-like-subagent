@@ -23,6 +23,11 @@
     "default_effort": "medium",
     "force": false
   },
+  "tui": {
+    "mode": "compact",
+    "task_scope": "all",
+    "max_visible_tasks": 2
+  },
   "experimental": {
     "tower": false
   }

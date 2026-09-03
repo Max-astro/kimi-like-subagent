@@ -10,6 +10,7 @@ import { profileDescription } from "./src/profiles.ts";
 import { registerCoreTools } from "./src/tools.ts";
 import { registerTower } from "./src/tower.ts";
 import { TowerStore } from "./src/tower-store.ts";
+import { registerSubagentUi } from "./src/tui-controller.ts";
 
 const EXTENSION_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,9 +22,11 @@ export default function kimiLikeSubagent(pi: ExtensionAPI): void {
 
 	registerCoreTools(pi, service, config, prompts);
 	if (config.experimental.tower) registerTower(pi, service, prompts);
+	const subagentUi = registerSubagentUi(pi, service, config);
 
 	pi.on("session_start", async (_event, ctx) => {
 		service.restore(ctx);
+		subagentUi.attach(ctx);
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
@@ -66,6 +69,7 @@ export default function kimiLikeSubagent(pi: ExtensionAPI): void {
 		try {
 			await service.shutdown();
 		} finally {
+			subagentUi.dispose();
 			if (config.experimental.tower) {
 				try {
 					const store = await TowerStore.fromCwd(ctx.cwd);

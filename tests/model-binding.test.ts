@@ -25,6 +25,7 @@ function config(secondaryModel?: PluginConfig["secondaryModel"]): PluginConfig {
 		subagent: { timeoutMs: 1, summaryMinChars: 1, summaryRetries: 0, outputCapBytes: 1024 },
 		swarm: { timeoutMs: 1, maxSubagents: 8, initialLaunchLimit: 2, launchIntervalMs: 1 },
 		secondaryModel,
+		tui: { mode: "compact", taskScope: "all", maxVisibleTasks: 2 },
 		experimental: { tower: false },
 	};
 }

@@ -5,6 +5,8 @@ import { modelPoolDescription } from "./config.ts";
 import { resolveModelBinding } from "./model-binding.ts";
 import { PromptCatalog } from "./prompts.ts";
 import { FleetScheduler, type ScheduledWork } from "./scheduler.ts";
+import type { MonitorSnapshot, SwarmView, TaskView } from "./monitor.ts";
+import { agentStatusComponent, sanitizeDisplayText, selectAgentToolView, selectSwarmToolView, singleLineComponent, swarmStatusComponent } from "./tui.ts";
 import type { AgentInvocation, AgentRequest } from "./agent-service.ts";
 import type { PluginConfig } from "./types.ts";
 
@@ -27,6 +29,54 @@ interface SwarmSpec {
 
 function textResult(text: string, details: unknown = {}) {
 	return { content: [{ type: "text" as const, text }], details };
+}
+
+interface ViewWatcher<T> {
+	dispose(): void;
+}
+
+function watchToolView<T>(
+	service: AgentService,
+	select: (snapshot: MonitorSnapshot) => T | undefined,
+	phaseKey: (view: T) => string,
+	onUpdate: ((result: ReturnType<typeof textResult>) => void) | undefined,
+): ViewWatcher<T> {
+	let current = select(service.monitor.snapshot());
+	let lastEmission = 0;
+	let lastPhase = current ? phaseKey(current) : "";
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const emit = () => {
+		if (!current || !onUpdate) return;
+		lastEmission = Date.now();
+		onUpdate(textResult("Subagent progress updated.", { view: current }));
+	};
+	const unsubscribe = service.monitor.subscribe((snapshot) => {
+		const next = select(snapshot);
+		if (!next) return;
+		current = next;
+		const nextPhase = phaseKey(next);
+		const immediate = !lastEmission || nextPhase !== lastPhase;
+		lastPhase = nextPhase;
+		if (immediate || Date.now() - lastEmission >= 200) {
+			if (timer) clearTimeout(timer);
+			timer = undefined;
+			emit();
+			return;
+		}
+		if (!timer) {
+			timer = setTimeout(() => {
+				timer = undefined;
+				emit();
+			}, Math.max(1, 200 - (Date.now() - lastEmission)));
+			timer.unref?.();
+		}
+	});
+	return {
+		dispose() {
+			unsubscribe();
+			if (timer) clearTimeout(timer);
+		},
+	};
 }
 
 function availableModelAliases(config: PluginConfig): string[] {
@@ -128,12 +178,12 @@ function taskSnapshot(service: AgentService, taskId: string): string {
 }
 
 async function runSwarm(
+	toolCallId: string,
 	input: SwarmInput,
 	service: AgentService,
 	config: PluginConfig,
 	ctx: ExtensionContext,
 	signal: AbortSignal | undefined,
-	onUpdate: ((result: ReturnType<typeof textResult>) => void) | undefined,
 ): Promise<{ text: string; details: unknown }> {
 	if (!input.description.trim()) throw new Error("description is required");
 	const specs = createSwarmSpecs(input, config.swarm.maxSubagents);
@@ -147,8 +197,20 @@ async function runSwarm(
 	const spawnProfile = input.subagent_type ?? "coder";
 	if (specs.some((spec) => spec.kind === "spawn")) await service.approveProfiles([spawnProfile], ctx);
 	await service.approveResumes(specs.filter((spec) => spec.kind === "resume").map((spec) => spec.agentId!), ctx);
+	service.monitor.apply({
+		type: "swarm_registered",
+		groupId: toolCallId,
+		parentToolCallId: toolCallId,
+		description: input.description,
+		profileName: spawnProfile,
+		members: specs.map((spec) => ({
+			memberId: `${toolCallId}:${spec.index}`,
+			index: spec.index,
+			label: spec.item ?? (spec.kind === "resume" ? `resume ${spec.agentId}` : `member ${spec.index}`),
+		})),
+		at: Date.now(),
+	});
 
-	let settled = 0;
 	const scheduler = new FleetScheduler({
 		initialLaunchLimit: config.swarm.initialLaunchLimit,
 		launchIntervalMs: config.swarm.launchIntervalMs,
@@ -158,29 +220,40 @@ async function runSwarm(
 	const fleetSignal = signal ? AbortSignal.any([signal, fleetAbort.signal]) : fleetAbort.signal;
 	const work: Array<ScheduledWork<{ spec: SwarmSpec; invocation: AgentInvocation }>> = specs.map((spec) => ({
 		async run(noteRateLimit) {
+			const origin = {
+				kind: "swarm" as const,
+				parentToolCallId: toolCallId,
+				groupId: toolCallId,
+				memberId: `${toolCallId}:${spec.index}`,
+			};
 			const request: AgentRequest =
 				spec.kind === "resume"
-					? { description: `${input.description} #${spec.index} (resume)`, prompt: spec.prompt, resume: spec.agentId, timeoutMs: config.swarm.timeoutMs }
+					? { description: `${input.description} #${spec.index} (resume)`, prompt: spec.prompt, resume: spec.agentId, timeoutMs: config.swarm.timeoutMs, origin }
 					: {
 							description: `${input.description} #${spec.index} (${spawnProfile})`,
 							prompt: spec.prompt,
 							subagentType: spawnProfile,
 							model: input.model,
 							timeoutMs: config.swarm.timeoutMs,
+							origin,
 						};
 			const invocation = await service.invoke(request, ctx, fleetSignal, {
 				onRateLimit: (_agentId, message) => noteRateLimit(message),
 			});
-			settled++;
-			onUpdate?.(textResult(`Agent swarm: ${settled}/${specs.length} settled`, { settled, total: specs.length }));
 			return { spec, invocation };
 		},
 	}));
 	try {
 		const invocations = await scheduler.run(work, fleetSignal);
+		service.monitor.apply({ type: "swarm_finished", groupId: toolCallId, status: "completed" });
 		return { text: renderSwarm(invocations, config.subagent.outputCapBytes), details: { invocations } };
 	} catch (error) {
 		fleetAbort.abort(error);
+		service.monitor.apply({
+			type: "swarm_finished",
+			groupId: toolCallId,
+			status: signal?.aborted ? "aborted" : "failed",
+		});
 		throw error;
 	}
 }
@@ -210,7 +283,7 @@ export function registerCoreTools(
 			.filter(Boolean)
 			.join("\n\n"),
 		parameters: Type.Object(agentProperties, { additionalProperties: false }),
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			if (params.resume?.trim() && params.subagent_type?.trim()) {
 				throw new Error("Cannot set subagent_type when resuming an existing agent");
 			}
@@ -223,30 +296,45 @@ export function registerCoreTools(
 					throw new Error("Background agent execution requires TaskList, TaskOutput, and TaskStop to be enabled");
 				}
 			}
-			const invocation = await service.invoke(
-				{
-					description: params.description,
-					prompt: params.prompt,
-					subagentType: params.subagent_type,
-					resume: params.resume,
-					runInBackground: params.run_in_background,
-					model: "model" in params ? (params.model as string | undefined) : undefined,
-				},
-				ctx,
-				signal,
-				{
-					onUpdate(update) {
-						onUpdate?.(textResult(`[agent ${update.agentId}] ${update.kind}: ${update.text}`, { update }));
-					},
-				},
+			const watcher = watchToolView(
+				service,
+				(snapshot) => selectAgentToolView(snapshot, toolCallId),
+				(view) => view.phase,
+				onUpdate,
 			);
-			if (invocation.background) {
-				return textResult(
-					`Background subagent started.\nagent_id: ${invocation.agentId}\ntask_id: ${invocation.taskId}\nCompletion will be delivered automatically; do not poll.`,
-					invocation,
+			try {
+				const invocation = await service.invoke(
+					{
+						description: params.description,
+						prompt: params.prompt,
+						subagentType: params.subagent_type,
+						resume: params.resume,
+						runInBackground: params.run_in_background,
+						model: "model" in params ? (params.model as string | undefined) : undefined,
+						origin: { kind: "agent", parentToolCallId: toolCallId },
+					},
+					ctx,
+					signal,
 				);
+				const details = { invocation, view: selectAgentToolView(service.monitor.snapshot(), toolCallId) };
+				if (invocation.background) {
+					return textResult(
+						`Background subagent started.\nagent_id: ${invocation.agentId}\ntask_id: ${invocation.taskId}\nCompletion will be delivered automatically; do not poll.`,
+						details,
+					);
+				}
+				return textResult(formatAgentResult(invocation.result!, config.subagent.outputCapBytes), details);
+			} finally {
+				watcher.dispose();
 			}
-			return textResult(formatAgentResult(invocation.result!, config.subagent.outputCapBytes), invocation);
+		},
+		renderCall(args, theme) {
+			const profile = args.resume ? "resume" : args.subagent_type ?? "coder";
+			return singleLineComponent(`${theme.bold(theme.fg("accent", "Agent"))} · ${sanitizeDisplayText(profile)} · ${sanitizeDisplayText(args.description)}`);
+		},
+		renderResult(result, options, theme) {
+			const view = (result.details as { view?: TaskView } | undefined)?.view;
+			return agentStatusComponent(view, options.expanded, theme);
 		},
 	});
 
@@ -264,8 +352,16 @@ export function registerCoreTools(
 		label: "Agent Swarm",
 		description: [prompts.tool("AgentSwarm"), modelPoolDescription(config)].filter(Boolean).join("\n\n"),
 		parameters: Type.Object(swarmProperties, { additionalProperties: false }),
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const { text, details } = await runSwarm(
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
+			const watcher = watchToolView(
+				service,
+				(snapshot) => selectSwarmToolView(snapshot, toolCallId),
+				(view) => `${view.counts.queued}:${view.counts.running}:${view.counts.retrying}:${view.counts.completed}:${view.counts.failed}`,
+				onUpdate,
+			);
+			try {
+				const { text, details } = await runSwarm(
+				toolCallId,
 				{
 					description: params.description,
 					subagent_type: params.subagent_type,
@@ -278,9 +374,19 @@ export function registerCoreTools(
 				config,
 				ctx,
 				signal,
-				onUpdate,
-			);
-			return textResult(text, details);
+				);
+				return textResult(text, { ...(details as object), view: selectSwarmToolView(service.monitor.snapshot(), toolCallId) });
+			} finally {
+				watcher.dispose();
+			}
+		},
+		renderCall(args, theme) {
+			const members = (args.items?.length ?? 0) + Object.keys(args.resume_agent_ids ?? {}).length;
+			return singleLineComponent(`${theme.bold(theme.fg("accent", "Agent Swarm"))} · ${sanitizeDisplayText(args.description)}${members ? ` · ${members} members` : ""}`);
+		},
+		renderResult(result, options, theme) {
+			const view = (result.details as { view?: SwarmView } | undefined)?.view;
+			return swarmStatusComponent(view, options.expanded, theme);
 		},
 	});
 

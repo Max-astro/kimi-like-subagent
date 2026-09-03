@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { ModelPoolEntry, PluginConfig, SecondaryModelConfig } from "./types.ts";
+import type { ModelPoolEntry, PluginConfig, SecondaryModelConfig, TuiConfig } from "./types.ts";
 
 export const PLUGIN_DATA_DIR = path.join(getAgentDir(), "kimi-like-subagent");
 export const CONFIG_PATH = path.join(PLUGIN_DATA_DIR, "config.json");
@@ -22,10 +22,11 @@ export const DEFAULT_CONFIG: PluginConfig = {
 		initialLaunchLimit: 5,
 		launchIntervalMs: 700,
 	},
+	tui: { mode: "compact", taskScope: "all", maxVisibleTasks: 2 },
 	experimental: { tower: false },
 };
 
-const TOP_LEVEL_KEYS = new Set(["subagent", "swarm", "secondary_model", "experimental"]);
+const TOP_LEVEL_KEYS = new Set(["subagent", "swarm", "secondary_model", "tui", "experimental"]);
 const SUBAGENT_KEYS = new Set(["timeout_ms", "summary_min_chars", "summary_retries", "output_cap_bytes"]);
 const SWARM_KEYS = new Set([
 	"timeout_ms",
@@ -35,6 +36,7 @@ const SWARM_KEYS = new Set([
 	"launch_interval_ms",
 ]);
 const SECONDARY_KEYS = new Set(["default_model", "models", "force", "default_effort"]);
+const TUI_KEYS = new Set(["mode", "task_scope", "max_visible_tasks"]);
 const EXPERIMENTAL_KEYS = new Set(["tower"]);
 const MODEL_ENTRY_KEYS = new Set(["model", "description", "thinking_level"]);
 
@@ -141,6 +143,23 @@ export function parseConfig(raw: unknown): PluginConfig {
 		if (section.launch_interval_ms !== undefined) config.swarm.launchIntervalMs = integer(section.launch_interval_ms, "swarm.launch_interval_ms", 0);
 	}
 	if (root.secondary_model !== undefined) config.secondaryModel = parseSecondary(root.secondary_model);
+	if (root.tui !== undefined) {
+		const section = record(root.tui, "tui");
+		assertKeys(section, TUI_KEYS, "tui");
+		if (section.mode !== undefined) {
+			if (section.mode !== "compact" && section.mode !== "minimal") throw new Error("tui.mode must be compact or minimal");
+			config.tui.mode = section.mode;
+		}
+		if (section.task_scope !== undefined) {
+			if (section.task_scope !== "all" && section.task_scope !== "background") {
+				throw new Error("tui.task_scope must be all or background");
+			}
+			config.tui.taskScope = section.task_scope;
+		}
+		if (section.max_visible_tasks !== undefined) {
+			config.tui.maxVisibleTasks = boundedInteger(section.max_visible_tasks, "tui.max_visible_tasks", 1, 4);
+		}
+	}
 	if (root.experimental !== undefined) {
 		const section = record(root.experimental, "experimental");
 		assertKeys(section, EXPERIMENTAL_KEYS, "experimental");
@@ -150,6 +169,36 @@ export function parseConfig(raw: unknown): PluginConfig {
 		}
 	}
 	return config;
+}
+
+export function saveTuiConfig(tui: TuiConfig, configPath = CONFIG_PATH): PluginConfig {
+	let root: Record<string, unknown> = {};
+	if (existsSync(configPath)) {
+		try {
+			root = record(JSON.parse(readFileSync(configPath, "utf8")), "config");
+		} catch (error) {
+			throw new Error(`Cannot parse ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	const nextRoot = {
+		...root,
+		tui: {
+			mode: tui.mode,
+			task_scope: tui.taskScope,
+			max_visible_tasks: tui.maxVisibleTasks,
+		},
+	};
+	const parsed = parseConfig(nextRoot);
+	mkdirSync(path.dirname(configPath), { recursive: true });
+	const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		writeFileSync(tempPath, `${JSON.stringify(nextRoot, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+		renameSync(tempPath, configPath);
+	} catch (error) {
+		if (existsSync(tempPath)) unlinkSync(tempPath);
+		throw error;
+	}
+	return parsed;
 }
 
 export function loadConfig(configPath = CONFIG_PATH): { config: PluginConfig; path: string; exists: boolean } {

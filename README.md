@@ -68,6 +68,43 @@ Pi 会自动加载目录下的 `index.ts`。安装或配置修改后运行 `/rel
 /swarm <只对下一轮生效的任务>
 ```
 
+## Subagent TUI 监控
+
+默认的 `compact` 模式会在编辑器上方嵌入一个小型任务条，只显示仍在执行的顶层任务。Swarm 在这里聚合成一行，不会用每个 member 占满屏幕；默认最多显示两行任务：
+
+```text
+Subagents  3 active · 2 queued · +1 hidden · /tasks
+● explore  inspect runtime · Read src/runtime.ts · 2s
+● Swarm  inspect renderers · 1 running · 2 queued · 0/3 done · 2s
+```
+
+前台 `Agent`/`AgentSwarm` 的原生 tool card 也会实时更新。折叠状态维持约两行，展开 Swarm card 后才显示成员。两种视图共享一个与 session/runtime 解耦的 monitor projection，因此界面不会通过轮询日志推测状态，也不会把渲染数据塞进模型可见结果。
+
+`/tasks` 打开固定宽度的单列浮层。它支持：
+
+- 顶层任务列表与 active/all 切换；
+- 进入 Swarm 成员列表，再进入单个 member 详情；
+- 查看最新活动、工具调用和有限的输出预览；
+- 在仍运行的 task 详情中按 `S`，再按 `Y` 确认停止。
+
+`/subagents settings` 可即时调整下面三项，并原子写回同一份 `config.json`；保存失败时不会改变当前界面：
+
+```json
+{
+  "tui": {
+    "mode": "compact",
+    "task_scope": "all",
+    "max_visible_tasks": 2
+  }
+}
+```
+
+- `mode`：`compact` 显示任务条；`minimal` 不渲染任务条，只通过可组合的 footer status 显示 active 数量。前台 tool card 在两种模式下都保留。
+- `task_scope`：`all` 同时显示前台与后台任务；`background` 只显示 detached task。
+- `max_visible_tasks`：任务条最多显示 `1`–`4` 行，默认 `2`。
+
+插件只占用 `kimi-like-subagent:tasks` 这个 widget/status key，沿用当前 Pi theme，不替换 footer，也不修改 Pi core。任务条在插件加载时按 `aboveEditor` 注册；Pi 当前没有 widget priority API，所以它通常位于更早注册的 todo widget 下方，但后加载插件仍可能改变相对顺序。实现不会反复注册 widget 来争抢位置。
+
 开启实验性 Tower：
 
 ```json
@@ -143,7 +180,7 @@ Inspect the bounded scope, cite paths and lines, and do not modify files.
 
 ## 验证
 
-开发测试覆盖：strict config、model binding、profile/tool allowlist、Swarm 输入与发射节奏、prompt 条件注入、Tower scope 与 exact-tip review gate。
+开发测试覆盖：strict config、model binding、profile/tool allowlist、Swarm 输入与发射节奏、prompt 条件注入、monitor 状态投影、TUI 宽度/聚合/设置/停止交互，以及 Tower scope 与 exact-tip review gate。
 
 ```sh
 npm ci --ignore-scripts
@@ -161,6 +198,7 @@ node evals/eval-prompts.mjs --live --pi /path/to/pi --model provider/model
 ## 已知边界
 
 - Pi extension API 没有 Kimi 的完整 permission-rule engine；本插件用 profile allowlist、project trust 和 Tower gate 提供关键结构性约束。
+- Pi extension API 没有 `aboveEditor` widget 的显式排序优先级；本插件保持单次注册并接受加载顺序，而不是抢占其他插件的视图。
 - `explore`、`plan`、Tower survey/reviewer 都不拥有 `bash`/`edit`/`write`。reviewer 还会关闭 project context/extensions，避免执行待评审分支新增的资源。实现 worker 的 `edit`/`write` 受 worktree、symlink 与 scope 硬检查；其 `bash` 仍可访问工作树之外，无法靠静态命令解析变成安全沙箱。merge gate 会拒绝 out-of-scope diff，但高风险仓库仍应叠加 OS/container sandbox。
 - Tower inbox 是持久 mailbox，不主动中断正在运行的 sibling；worker 在自然工具边界读取，parent 会被 worker completion 自动唤回。
 - session、task 与 Tower audit state 都持久化，但进程内执行不会跨 Pi 重启继续；重启后可用 agent ID resume。

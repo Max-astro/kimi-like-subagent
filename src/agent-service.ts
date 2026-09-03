@@ -5,6 +5,7 @@ import { resolveModelBinding } from "./model-binding.ts";
 import { discoverProfiles, effectiveTools } from "./profiles.ts";
 import { PiAgentSessionRuntime } from "./runtime.ts";
 import { StateStore } from "./state.ts";
+import { MonitorProjection, monitorEventTime, type MonitorActivity, type MonitorOrigin } from "./monitor.ts";
 import type {
 	AgentHandle,
 	AgentProfile,
@@ -13,7 +14,7 @@ import type {
 	PluginConfig,
 	ProfileBinding,
 	RuntimeHooks,
-	RuntimeUpdate,
+	RuntimeEvent,
 	SubagentRuntime,
 	TaskRecord,
 } from "./types.ts";
@@ -30,6 +31,7 @@ export interface AgentRequest {
 	internalProfile?: boolean;
 	forcePrimary?: boolean;
 	projectTrusted?: boolean;
+	origin?: MonitorOrigin;
 }
 
 export interface AgentInvocation {
@@ -41,7 +43,7 @@ export interface AgentInvocation {
 }
 
 export interface AgentInvocationHooks extends RuntimeHooks {
-	onTaskUpdate?(task: TaskRecord, update: RuntimeUpdate): void;
+	onTaskEvent?(task: TaskRecord, event: RuntimeEvent): void;
 }
 
 const PROFILE_BINDING_ENTRY = "kimi-like-subagent-profile-binding";
@@ -124,6 +126,7 @@ export function formatAgentResult(result: AgentRunResult, maxBytes: number): str
 export class AgentService {
 	readonly state: StateStore;
 	readonly runtime: SubagentRuntime;
+	readonly monitor: MonitorProjection;
 	private closing = false;
 	private readonly approvedProjectProfiles = new Set<string>();
 	private internalResumeGuard?: (record: AgentRecord, ctx: ExtensionContext) => Promise<void>;
@@ -134,14 +137,40 @@ export class AgentService {
 		private readonly extensionRoot: string,
 		runtime?: SubagentRuntime,
 		state?: StateStore,
+		monitor?: MonitorProjection,
 	) {
 		this.runtime = runtime ?? new PiAgentSessionRuntime();
 		this.state = state ?? new StateStore(pi);
+		this.monitor = monitor ?? new MonitorProjection();
 	}
 
 	restore(ctx: ExtensionContext): void {
 		this.closing = false;
 		this.state.restore(ctx);
+		this.monitor.apply({ type: "reset" });
+		for (const task of this.state.tasks.values()) {
+			const agent = this.state.getAgent(task.agentId);
+			this.monitor.apply({
+				type: "task_started",
+				taskId: task.taskId,
+				agentId: task.agentId,
+				description: task.description,
+				profileName: agent?.profileName ?? "agent",
+				model: agent?.model ?? "unknown",
+				detached: task.detached,
+				startedAt: monitorEventTime(task.startedAt),
+			});
+			if (task.status !== "running") {
+				this.monitor.apply({
+					type: "task_finished",
+					taskId: task.taskId,
+					status: task.status,
+					endedAt: monitorEventTime(task.endedAt),
+					summary: task.outputPreview,
+					error: task.stopReason,
+				});
+			}
+		}
 	}
 
 	isChildSession(ctx: ExtensionContext): boolean {
@@ -233,13 +262,50 @@ export class AgentService {
 	private hooks(task: TaskRecord, external?: AgentInvocationHooks): RuntimeHooks {
 		return {
 			onRateLimit: external?.onRateLimit,
-			onUpdate: (update) => {
-				const line = update.kind === "text" ? update.text : `\n[${update.kind}] ${update.text}\n`;
+			onEvent: (event) => {
+				const line = this.eventLogLine(event.activity);
 				this.state.appendTaskOutput(task.taskId, line);
-				external?.onUpdate?.(update);
-				external?.onTaskUpdate?.(task, update);
+				this.monitor.apply({ type: "activity", taskId: task.taskId, activity: event.activity, at: Date.now() });
+				external?.onEvent?.(event);
+				external?.onTaskEvent?.(task, event);
 			},
 		};
+	}
+
+	private eventLogLine(event: MonitorActivity): string {
+		if (event.type === "text_delta") return event.delta;
+		if (event.type === "thinking") return "";
+		if (event.type === "tool_started") return `\n[tool] ${event.toolName}\n`;
+		if (event.type === "tool_updated") return "";
+		if (event.type === "tool_finished") return `\n[tool:${event.isError ? "error" : "done"}] ${event.toolName}\n`;
+		if (event.type === "retry_started") return `\n[retry ${event.attempt}/${event.maxAttempts}] ${event.message}\n`;
+		return `\n[retry ${event.attempt}] ${event.success ? "recovered" : event.finalError ?? "failed"}\n`;
+	}
+
+	private publishTaskStarted(task: TaskRecord, record: AgentRecord, origin: MonitorOrigin | undefined): void {
+		this.monitor.apply({
+			type: "task_started",
+			taskId: task.taskId,
+			agentId: task.agentId,
+			description: task.description,
+			profileName: record.profileName,
+			model: record.model,
+			detached: task.detached,
+			startedAt: monitorEventTime(task.startedAt),
+			origin,
+		});
+	}
+
+	private publishTaskFinished(task: TaskRecord, result: AgentRunResult): void {
+		this.monitor.apply({
+			type: "task_finished",
+			taskId: task.taskId,
+			status: result.status,
+			endedAt: Date.now(),
+			summary: result.result,
+			error: result.error,
+			usage: result.usage,
+		});
 	}
 
 	private failed(record: AgentRecord, message: string): AgentRunResult {
@@ -258,13 +324,15 @@ export class AgentService {
 	private settle(handle: AgentHandle, task: TaskRecord, notify: boolean): Promise<AgentRunResult> {
 		return handle.completion.then((result) => {
 			this.state.finishTask(task.taskId, result);
+			this.publishTaskFinished(task, result);
 			if (notify && !this.closing) {
+				const view = this.monitor.snapshot().tasks.find((candidate) => candidate.taskId === task.taskId);
 				this.pi.sendMessage(
 					{
 						customType: "kimi-like-subagent-notification",
 						content: `Background subagent ${result.agentId} (${result.profileName}) ${result.status}.\n${formatAgentResult(result, this.config.subagent.outputCapBytes)}`,
 						display: true,
-						details: { agentId: result.agentId, taskId: task.taskId, status: result.status },
+						details: { agentId: result.agentId, taskId: task.taskId, status: result.status, view },
 					},
 					{ deliverAs: "followUp", triggerTurn: true },
 				);
@@ -298,6 +366,7 @@ export class AgentService {
 			const model = parseModel(record.model, ctx);
 			this.state.markAgentRunning(record.agentId, request.description);
 			const task = this.state.createTask(record.agentId, request.description, detached);
+			this.publishTaskStarted(task, record, request.origin);
 			try {
 				handle = await this.runtime.resume(
 					{
@@ -323,6 +392,7 @@ export class AgentService {
 			} catch (error) {
 				const result = this.failed(record, error instanceof Error ? error.message : String(error));
 				this.state.finishTask(task.taskId, result);
+				this.publishTaskFinished(task, result);
 				return { background: false, agentId: record.agentId, taskId: task.taskId, profileName: profile.name, result };
 			}
 			const completion = this.settle(handle, task, detached);
@@ -353,6 +423,7 @@ export class AgentService {
 			projectTrusted,
 		});
 		const task = this.state.createTask(agentId, request.description, detached);
+		this.publishTaskStarted(task, record, request.origin ?? (request.internalProfile ? { kind: "tower" } : undefined));
 		try {
 			handle = await this.runtime.spawn(
 				{
@@ -378,6 +449,7 @@ export class AgentService {
 		} catch (error) {
 			const result = this.failed(record, error instanceof Error ? error.message : String(error));
 			this.state.finishTask(task.taskId, result);
+			this.publishTaskFinished(task, result);
 			return { background: false, agentId, taskId: task.taskId, profileName: profile.name, result };
 		}
 		const completion = this.settle(handle, task, detached);

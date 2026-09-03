@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { AgentService } from "../src/agent-service.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { StateStore } from "../src/state.ts";
-import type { AgentHandle, AgentRunResult, SpawnSpec, SubagentRuntime } from "../src/types.ts";
+import type { AgentHandle, AgentRunResult, RuntimeHooks, SpawnSpec, SubagentRuntime } from "../src/types.ts";
 
 function extensionRoot(): string {
 	return new URL("..", import.meta.url).pathname.replace(/\/$/, "");
@@ -60,6 +60,66 @@ function fixture() {
 }
 
 describe("AgentService workflow boundaries", () => {
+	it("publishes runtime activity and terminal state through the monitor projection", async () => {
+		const pi = {
+			appendEntry() {},
+			sendMessage() {},
+			getActiveTools: () => ["read"],
+			getAllTools: () => [{ name: "read" }],
+		} as never;
+		const runtime: SubagentRuntime = {
+			async spawn(spec: SpawnSpec, _signal?: AbortSignal, hooks?: RuntimeHooks) {
+				hooks?.onEvent?.({
+					agentId: spec.agentId,
+					activity: { type: "tool_started", toolCallId: "read-1", toolName: "read", args: { path: "src/runtime.ts" } },
+				});
+				const result: AgentRunResult = {
+					agentId: spec.agentId,
+					profileName: spec.profile.name,
+					status: "completed",
+					result: "done",
+					usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1, contextTokens: 3 },
+					model: `${spec.model.provider}/${spec.model.id}`,
+					sessionFile: spec.sessionFile,
+				};
+				return { agentId: spec.agentId, profileName: spec.profile.name, session: {} as never, completion: Promise.resolve(result), abort: async () => {} };
+			},
+			async resume() { throw new Error("not used"); },
+			async abort() {},
+			async dispose() {},
+		};
+		const state = new StateStore(pi, { dataDir: mkdtempSync(path.join(tmpdir(), "kimi-monitor-")) });
+		const service = new AgentService(pi, structuredClone(DEFAULT_CONFIG), extensionRoot(), runtime, state);
+		const ctx = {
+			cwd: process.cwd(),
+			model: { provider: "provider", id: "model" },
+			thinkingLevel: "medium",
+			modelRegistry: { find: () => undefined, hasConfiguredAuth: () => true },
+			isProjectTrusted: () => true,
+			sessionManager: { getSessionId: () => "parent-session", getEntries: () => [] },
+		} as never;
+		service.restore(ctx);
+
+		const invocation = await service.invoke(
+			{
+				description: "inspect runtime",
+				prompt: "inspect",
+				origin: { kind: "agent", parentToolCallId: "agent-call" },
+			},
+			ctx,
+		);
+
+		expect(service.monitor.snapshot().tasks).toEqual([
+			expect.objectContaining({
+				taskId: invocation.taskId,
+				phase: "completed",
+				toolCount: 1,
+				latestActivity: "done",
+				origin: { kind: "agent", parentToolCallId: "agent-call" },
+			}),
+		]);
+	});
+
 	it("can force an internal reviewer to ignore project-controlled resources", async () => {
 		const { service, ctx, seen } = fixture();
 		await service.invoke(

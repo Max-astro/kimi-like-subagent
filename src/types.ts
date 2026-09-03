@@ -31,6 +31,12 @@ export interface SecondaryModelConfig {
 	defaultThinkingLevel?: ThinkingLevel;
 }
 
+export interface TuiConfig {
+	mode: "compact" | "minimal";
+	taskScope: "all" | "background";
+	maxVisibleTasks: number;
+}
+
 export interface PluginConfig {
 	subagent: {
 		timeoutMs: number;
@@ -46,6 +52,7 @@ export interface PluginConfig {
 		launchIntervalMs: number;
 	};
 	secondaryModel?: SecondaryModelConfig;
+	tui: TuiConfig;
 	experimental: {
 		tower: boolean;
 	};
@@ -137,16 +144,22 @@ export interface AgentHandle {
 	abort(reason?: string): Promise<void>;
 }
 
-export interface RuntimeUpdate {
+export type SubagentActivityEvent =
+	| { type: "text_delta"; delta: string }
+	| { type: "thinking" }
+	| { type: "tool_started"; toolCallId: string; toolName: string; args?: unknown }
+	| { type: "tool_updated"; toolCallId: string; toolName: string; partialResult?: unknown }
+	| { type: "tool_finished"; toolCallId: string; toolName: string; result?: unknown; isError: boolean }
+	| { type: "retry_started"; attempt: number; maxAttempts: number; message: string }
+	| { type: "retry_finished"; success: boolean; attempt: number; finalError?: string };
+
+export interface RuntimeEvent {
 	agentId: string;
-	kind: "text" | "tool" | "retry";
-	text: string;
-	toolName?: string;
-	toolArgs?: unknown;
+	activity: SubagentActivityEvent;
 }
 
 export interface RuntimeHooks {
-	onUpdate?(update: RuntimeUpdate): void;
+	onEvent?(event: RuntimeEvent): void;
 	onRateLimit?(agentId: string, message: string): void;
 }
 

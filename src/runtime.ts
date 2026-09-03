@@ -122,20 +122,41 @@ export class PiAgentSessionRuntime implements SubagentRuntime {
 		let explicitAbort: string | undefined;
 		const unsubscribe = session.subscribe((event) => {
 			if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-				hooks?.onUpdate?.({ agentId: spec.agentId, kind: "text", text: event.assistantMessageEvent.delta });
+				hooks?.onEvent?.({ agentId: spec.agentId, activity: { type: "text_delta", delta: event.assistantMessageEvent.delta } });
+			}
+			if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+				hooks?.onEvent?.({ agentId: spec.agentId, activity: { type: "thinking" } });
 			}
 			if (event.type === "tool_execution_start") {
-				hooks?.onUpdate?.({
+				hooks?.onEvent?.({
 					agentId: spec.agentId,
-					kind: "tool",
-					text: event.toolName,
-					toolName: event.toolName,
-					toolArgs: event.args,
+					activity: { type: "tool_started", toolCallId: event.toolCallId, toolName: event.toolName, args: event.args },
+				});
+			}
+			if (event.type === "tool_execution_update") {
+				hooks?.onEvent?.({
+					agentId: spec.agentId,
+					activity: { type: "tool_updated", toolCallId: event.toolCallId, toolName: event.toolName, partialResult: event.partialResult },
+				});
+			}
+			if (event.type === "tool_execution_end") {
+				hooks?.onEvent?.({
+					agentId: spec.agentId,
+					activity: { type: "tool_finished", toolCallId: event.toolCallId, toolName: event.toolName, result: event.result, isError: event.isError },
 				});
 			}
 			if (event.type === "auto_retry_start") {
-				hooks?.onUpdate?.({ agentId: spec.agentId, kind: "retry", text: event.errorMessage });
+				hooks?.onEvent?.({
+					agentId: spec.agentId,
+					activity: { type: "retry_started", attempt: event.attempt, maxAttempts: event.maxAttempts, message: event.errorMessage },
+				});
 				if (looksRateLimited(event.errorMessage)) hooks?.onRateLimit?.(spec.agentId, event.errorMessage);
+			}
+			if (event.type === "auto_retry_end") {
+				hooks?.onEvent?.({
+					agentId: spec.agentId,
+					activity: { type: "retry_finished", success: event.success, attempt: event.attempt, finalError: event.finalError },
+				});
 			}
 		});
 
