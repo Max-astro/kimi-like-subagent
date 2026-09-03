@@ -1,0 +1,30 @@
+{
+  "name": "kimi-like-subagent",
+	"version": "0.1.0",
+  "private": true,
+  "type": "module",
+	"keywords": ["pi-package", "subagents"],
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"pi": {
+		"extensions": ["./index.ts"]
+	},
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": "0.84.4",
+		"@earendil-works/pi-ai": "0.84.4",
+		"@earendil-works/pi-coding-agent": "0.84.4"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-agent-core": "0.84.4",
+		"@earendil-works/pi-ai": "0.84.4",
+		"@earendil-works/pi-coding-agent": "0.84.4",
+		"@types/node": "22.19.19",
+		"typescript": "5.9.3",
+		"vitest": "4.1.9"
+  }
+}

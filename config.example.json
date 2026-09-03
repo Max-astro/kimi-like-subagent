@@ -1,0 +1,29 @@
+{
+  "subagent": {
+    "timeout_ms": 7200000,
+    "summary_min_chars": 200,
+    "summary_retries": 1,
+    "output_cap_bytes": 51200
+  },
+  "swarm": {
+    "timeout_ms": 7200000,
+    "max_subagents": 128,
+    "initial_launch_limit": 5,
+    "launch_interval_ms": 700
+  },
+  "secondary_model": {
+    "default_model": "fast",
+    "models": {
+      "fast": {
+        "model": "provider/model-id",
+        "description": "Fast secondary model",
+        "thinking_level": "low"
+      }
+    },
+    "default_effort": "medium",
+    "force": false
+  },
+  "experimental": {
+    "tower": false
+  }
+}

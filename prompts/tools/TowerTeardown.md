@@ -1,0 +1,1 @@
+Remove mission and reviewer worktrees while preserving branches and `.tower/comms` audit data. Teardown refuses to run while fleet tasks are live. Dirty or unverifiable worktrees are retained unless `force` is explicitly true.

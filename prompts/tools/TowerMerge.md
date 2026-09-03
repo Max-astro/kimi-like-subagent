@@ -1,0 +1,1 @@
+Merge a completed mission branch into the recorded base. The gate requires no live worker/reviewer, dependencies settled, changes inside mission scope, a clean review with `merge` recommendation at the exact branch tip, the base branch checked out, and no conflicting uncommitted base files. Surveys must have zero diff.

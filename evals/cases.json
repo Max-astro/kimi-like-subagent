@@ -1,0 +1,32 @@
+[
+  {
+    "id": "trivial-single-file",
+    "task": "Rename one local variable in src/a.ts and run its existing unit test.",
+    "expected": "direct",
+    "reason": "Delegation overhead exceeds the small bounded task."
+  },
+  {
+    "id": "two-independent-investigations",
+    "task": "Find the cause of the API timeout and independently verify whether the public documentation promises retry behavior. Return evidence only; do not edit.",
+    "expected": "agent",
+    "reason": "Two heterogeneous evidence streams fit a few parallel Agent calls."
+  },
+  {
+    "id": "repeated-module-review",
+    "task": "Review each of 12 independent parser modules for the same unsafe fallback pattern and return one report per module.",
+    "expected": "swarm",
+    "reason": "One repeated task shape over many distinct items fits AgentSwarm."
+  },
+  {
+    "id": "dependent-sequence",
+    "task": "Inspect the bug, implement the fix based on that diagnosis, then review the resulting diff.",
+    "expected": "agent",
+    "reason": "Delegation helps but the scout-worker-review sequence must stay foreground and ordered."
+  },
+  {
+    "id": "parallel-writers-shared-cwd",
+    "task": "Have three agents concurrently edit the same central config file to implement competing approaches.",
+    "expected": "direct",
+    "reason": "Shared-cwd concurrent writers are structurally unsafe; Tower would require disjoint scopes."
+  }
+]
