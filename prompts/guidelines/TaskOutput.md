@@ -1,0 +1,1 @@
+- Use TaskOutput to read a background subagent task's output; background completion is delivered automatically, so do not poll TaskOutput in a loop.

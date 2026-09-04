@@ -282,6 +282,8 @@ export function registerCoreTools(
 		]
 			.filter(Boolean)
 			.join("\n\n"),
+		promptSnippet: prompts.snippet("Agent"),
+		promptGuidelines: prompts.guidelines("Agent"),
 		parameters: Type.Object(agentProperties, { additionalProperties: false }),
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			if (params.resume?.trim() && params.subagent_type?.trim()) {
@@ -351,6 +353,8 @@ export function registerCoreTools(
 		name: "AgentSwarm",
 		label: "Agent Swarm",
 		description: [prompts.tool("AgentSwarm"), modelPoolDescription(config)].filter(Boolean).join("\n\n"),
+		promptSnippet: prompts.snippet("AgentSwarm"),
+		promptGuidelines: prompts.guidelines("AgentSwarm"),
 		parameters: Type.Object(swarmProperties, { additionalProperties: false }),
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const watcher = watchToolView(
@@ -394,6 +398,8 @@ export function registerCoreTools(
 		name: "TaskList",
 		label: "Task List",
 		description: prompts.tool("TaskList"),
+		promptSnippet: prompts.snippet("TaskList"),
+		promptGuidelines: prompts.guidelines("TaskList"),
 		parameters: Type.Object(
 			{
 				active_only: Type.Optional(Type.Boolean({ description: "Only running tasks; defaults to true" })),
@@ -417,6 +423,8 @@ export function registerCoreTools(
 		name: "TaskOutput",
 		label: "Task Output",
 		description: prompts.tool("TaskOutput"),
+		promptSnippet: prompts.snippet("TaskOutput"),
+		promptGuidelines: prompts.guidelines("TaskOutput"),
 		parameters: Type.Object({ task_id: Type.String() }, { additionalProperties: false }),
 		async execute(_toolCallId, params) {
 			return textResult(taskSnapshot(service, params.task_id), service.state.getTask(params.task_id));
@@ -427,6 +435,8 @@ export function registerCoreTools(
 		name: "TaskStop",
 		label: "Task Stop",
 		description: prompts.tool("TaskStop"),
+		promptSnippet: prompts.snippet("TaskStop"),
+		promptGuidelines: prompts.guidelines("TaskStop"),
 		parameters: Type.Object(
 			{ task_id: Type.String(), reason: Type.Optional(Type.String({ description: "Defaults to Stopped by TaskStop" })) },
 			{ additionalProperties: false },

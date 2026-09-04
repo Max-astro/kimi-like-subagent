@@ -1,0 +1,3 @@
+- Use the Agent tool to delegate substantial, bounded work (multi-file exploration, independent implementation or review) to a subagent; do not use Agent for trivial one- or two-step lookups you can do directly.
+- Use a foreground Agent call when the next step depends on the result; use Agent with run_in_background only while useful independent work remains — completion is delivered automatically, so do not poll or sleep.
+- Prefer the Agent tool's resume parameter to continue earlier delegated work instead of spawning a fresh subagent, and prefer the explore/plan profiles for read-only Agent tasks and coder for a single writer.

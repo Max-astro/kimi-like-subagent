@@ -1,0 +1,1 @@
+- Use AgentSwarm when one repeated task template applies to many independent items, and call AgentSwarm alone as the only tool call in that assistant response.

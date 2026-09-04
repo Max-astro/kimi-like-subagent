@@ -15,6 +15,17 @@ export class PromptCatalog {
 		return this.read(`prompts/tools/${name}.md`);
 	}
 
+	snippet(name: string): string {
+		return this.read(`prompts/snippets/${name}.md`);
+	}
+
+	guidelines(name: string): string[] {
+		return this.read(`prompts/guidelines/${name}.md`)
+			.split("\n")
+			.map((line) => line.replace(/^\s*-\s*/, "").trim())
+			.filter(Boolean);
+	}
+
 	mode(name: string): string {
 		return this.read(`prompts/modes/${name}.md`);
 	}

@@ -1,0 +1,1 @@
+- Use TaskList to inspect running background subagent tasks instead of polling or sleeping.

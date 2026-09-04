@@ -12,6 +12,8 @@ function extensionRoot(): string {
 
 interface RegisteredTool {
 	name: string;
+	promptSnippet?: string;
+	promptGuidelines?: string[];
 	parameters: { properties: Record<string, unknown> };
 	execute(...args: unknown[]): Promise<unknown>;
 	renderCall?: (...args: never[]) => unknown;
@@ -39,6 +41,17 @@ function register(config = structuredClone(DEFAULT_CONFIG)) {
 describe("core tool registration", () => {
 	it("registers the Kimi-compatible stable tool surface", () => {
 		expect(register().map((tool) => tool.name)).toEqual(["Agent", "AgentSwarm", "TaskList", "TaskOutput", "TaskStop"]);
+	});
+
+	it("exposes promptSnippet and tool-named promptGuidelines for every core tool", () => {
+		for (const tool of register()) {
+			expect(tool.promptSnippet, `${tool.name} promptSnippet`).toBeTruthy();
+			expect(tool.promptSnippet).not.toMatch(/[\r\n]/);
+			expect(tool.promptGuidelines?.length, `${tool.name} promptGuidelines`).toBeGreaterThan(0);
+			for (const guideline of tool.promptGuidelines!) {
+				expect(guideline, `${tool.name} guideline must name its tool`).toContain(tool.name);
+			}
+		}
 	});
 
 	it("provides compact renderers for Agent and AgentSwarm", () => {

@@ -1,0 +1,1 @@
+- Use TaskStop to cancel a background subagent task that is no longer needed.

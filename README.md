@@ -164,6 +164,13 @@ Inspect the bounded scope, cite paths and lines, and do not modify files.
 
 `primary` 是保留 alias。`force: true` 时 pool 必须只有一个 entry，call-site 不得覆盖。resume 永远保留原 agent 的模型。
 
+## System prompt 注入层
+
+插件使用两层 pi 原生机制把 subagent 工具暴露进 system prompt：
+
+- **`promptSnippet` / `promptGuidelines`**：`Agent`、`AgentSwarm`、`TaskList`、`TaskOutput`、`TaskStop` 注册时携带一行 snippet 与若干 guideline bullet（内容为 `prompts/snippets/`、`prompts/guidelines/` 下的独立 Markdown）。pi 渲染默认 system prompt 时，snippet 进入 `Available tools` 列表，guidelines 进入 `Guidelines` 段，且只在工具 active 时出现。pi 会把 guidelines 平铺进 Guidelines 段且不带工具名前缀，因此每条 guideline 都显式点名自己的工具。Tower 工具是实验特性且多达 11 个，刻意不携带 snippet，避免稀释工具列表；它们由 `/tower` 模式 prompt 覆盖。
+- **`before_agent_start` 注入**：`prompts/modes/` 下的 delegation/swarm/tower 模式策略，以及按 session 动态生成的 "Available subagent profiles for this caller" 列表，追加在 system prompt 末尾。这一层在自定义 system prompt（`--system-prompt`/prompt template）下仍然生效——那种情况下 pi 不渲染 `Available tools`/`Guidelines`——也能携带随 `ctx` 变化的内容，因此委派策略（prompt 写法、并发写安全、父 Agent 责任）保留在这一层。
+
 ## 为什么不依赖 prompt-snippets
 
 现有 `prompt-snippets` 很适合做**用户主动、单轮、可见的实验开关**：它能把一个 delegation snippet prepend/append 到下一条用户消息，操作成本低，也天然适合人工 A/B。
