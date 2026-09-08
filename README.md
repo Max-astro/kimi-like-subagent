@@ -202,6 +202,24 @@ node evals/eval-prompts.mjs
 node evals/eval-prompts.mjs --live --pi /path/to/pi --model provider/model
 ```
 
+工作分配的轻量行为验收使用独立入口，默认只列出用例，不调用模型：
+
+```sh
+node evals/eval-work-allocation.mjs
+node evals/eval-work-allocation.mjs --live
+node evals/eval-work-allocation.mjs --live --case background,scope
+```
+
+该入口固定使用 `openai/gpt-5.6-sol`、`thinking=high`，父子请求发送前都会核对 provider、模型及 reasoning effort，不使用 `openai-codex`。它从现有 Pi agent 目录复制必要的模型和认证配置，在临时目录运行，结束时删除复制的配置。可用 `--agent-dir` 指定配置来源，`--pi` 指定 Pi 可执行文件。临时目录保留结果、session、时间线及渲染记录，路径在启动时打印。
+
+`--live` 默认只运行 background 用例；其他用例通过 `--case` 选择。每批最多 18 次模型请求；累计已完成请求达到 60,000 tokens 后拒绝新请求，每次最多输出 4,096 tokens，每用例限时 180 秒。累计量包含缓存 token；正在执行的请求可能超过阈值，强制停止时未完成请求的实际计费不一定能记录。失败用例不会自动重跑。默认使用精简 parent system prompt，并保留 Agent/Task 工具、对应 guidelines、模式注入和原生 child 提示，启用 explore 所需的 read/grep/find/ls；`--full-system` 可检查 Pi 默认提示，但会增加上下文消耗。RPC 宿主在 parent 暂时交回当前轮次时保持运行，收到后台通知并完成最终处理后才退出。
+
+用例覆盖简单任务直接执行、一个后台 explore 与主实现重叠、前台 coder 遇到缺失规范时返回阻塞。后两项显式要求使用子代理，验证执行与范围控制，不证明模型能自主选出最佳拆解。自动验收检查产物、模型身份、任务结算、轮询、执行重叠和真实 Agent 结果的窄/宽 TUI 渲染；仍需查看 trace 中的交付及最终回答，确认语义正确。该测试是行为 smoke test，不是性能 A/B 或实际终端截图验收。
+
+普通 Agent 的后台委派现在要求 parent 保留当前可推进的必要工作；没有独立工作时允许直接执行或为上下文隔离前台委派。coder 需在范围膨胀或关键前提缺失时返回明确的部分交付。这些是提示约定，尚不提供运行时强制阶段暂停；`completed` 仍表示本次运行结束，parent 必须检查交付内容才能认定用户任务完成。
+
+本批实际行为、失败尝试、用量和剩余限制见[验收记录](docs/plans/subagent-work-allocation-validation.md)。
+
 ## 已知边界
 
 - Pi extension API 没有 Kimi 的完整 permission-rule engine；本插件用 profile allowlist、project trust 和 Tower gate 提供关键结构性约束。

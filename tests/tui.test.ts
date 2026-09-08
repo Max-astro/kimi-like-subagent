@@ -67,6 +67,22 @@ function populatedMonitor(): MonitorProjection {
 }
 
 describe("compact task widget", () => {
+	it("keeps active background descriptions and activity safe at narrow widths", () => {
+		const monitor = new MonitorProjection(() => 3_000);
+		monitor.apply({
+			type: "task_started", taskId: "background", agentId: "coder", profileName: "coder",
+			description: "Bounded task\n\u001b[2J\u001b]0;bad title\u0007" + "界".repeat(80),
+			model: "openai/gpt-5.6-sol", detached: true, startedAt: 1_000,
+		});
+		monitor.apply({ type: "activity", taskId: "background", at: 2_000, activity: { type: "text_delta", delta: "Needs follow-up\r\n\t\u001b[2J" } });
+		for (const width of [20, 40, 80]) {
+			const lines = renderTaskWidget(monitor.snapshot(), { mode: "compact", taskScope: "background", maxVisibleTasks: 2 }, theme, width);
+			expect(lines).toHaveLength(2);
+			expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+			expect(lines.join("").replace(/\u001b\[[0-9;]*m/g, "")).not.toMatch(/[\r\n\t\u001b\u0007]/);
+		}
+	});
+
 	it("uses two stable top-level rows and aggregates swarm members", () => {
 		const lines = renderTaskWidget(
 			populatedMonitor().snapshot(),
@@ -96,6 +112,30 @@ describe("compact task widget", () => {
 });
 
 describe("inline subagent cards", () => {
+	it("renders a bounded coder handoff without terminal controls or stale active rows", () => {
+		const monitor = populatedMonitor();
+		monitor.apply({
+			type: "task_finished",
+			taskId: "task-hidden",
+			status: "completed",
+			endedAt: 3_000,
+			summary: "Needs follow-up\n\u001b[2J\u001b]0;bad title\u0007Changed src/parser.ts\rChecks passed\tRemaining: migration " + "界".repeat(100),
+		});
+		const snapshot = monitor.snapshot();
+		const task = snapshot.tasks.find((candidate) => candidate.taskId === "task-hidden");
+		for (const width of [20, 40, 80]) {
+			for (const expanded of [false, true]) {
+				const lines = renderAgentStatus(task, expanded, snapshot.now, theme, width);
+				expect(lines.length).toBeGreaterThan(0);
+				expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+				expect(lines.join("").replace(/\u001b\[[0-9;]*m/g, "")).not.toMatch(/[\r\n\t\u001b\u0007]/);
+				expect(lines.join("")).not.toMatch(/NaN|undefined/);
+			}
+		}
+		expect(renderAgentStatus(task, false, snapshot.now, theme, 80).join(" ")).toContain("Needs follow-up");
+		expect(renderTaskWidget(snapshot, { mode: "compact", taskScope: "background", maxVisibleTasks: 2 }, theme, 40)).toEqual([]);
+	});
+
 	it("keeps Agent status to two result lines when collapsed", () => {
 		const snapshot = populatedMonitor().snapshot();
 		const view = selectAgentToolView(snapshot, "call-agent");
